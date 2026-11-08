@@ -1,6 +1,7 @@
 package com.example.myfyp
 
 import android.os.Bundle
+import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -17,26 +18,32 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.example.myfyp.ui.theme.MyFYPTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
-import com.example.myfyp.ui.theme.MyFYPTheme
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+private const val PREFERENCES_NAME = "iepms_preferences"
+private const val KEY_LAST_IP = "last_ip_address"
+private const val KEY_ENGLISH = "english_language"
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -44,40 +51,47 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             MyFYPTheme {
-                    Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                        SensorScreen(modifier = Modifier.padding(innerPadding))
-                    }
+                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
+                    SensorScreen(modifier = Modifier.padding(innerPadding))
                 }
             }
         }
     }
+}
+
 @Composable
 private fun SensorScreen(modifier: Modifier = Modifier) {
-    var ipAddress by remember { mutableStateOf("") }
-    var activeHost by remember { mutableStateOf("") }
+    val context = LocalContext.current
+    val preferences = remember { context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE) }
+    val savedIp = remember { preferences.getString(KEY_LAST_IP, "").orEmpty() }
+    var ipAddress by remember { mutableStateOf(savedIp) }
+    var activeHost by remember { mutableStateOf(savedIp) }
+    var english by remember { mutableStateOf(preferences.getBoolean(KEY_ENGLISH, false)) }
     var readings by remember { mutableStateOf(SensorReadings()) }
-    var status by remember { mutableStateOf("未连接") }
+    var status by remember { mutableStateOf(if (savedIp.isBlank()) "未连接" else "正在自动连接…") }
     var lastUpdated by remember { mutableStateOf("--") }
     var refreshToken by remember { mutableStateOf(0) }
+
+    val text = if (english) EnglishText else ChineseText
 
     suspend fun refresh() {
         val host = activeHost.trim().removePrefix("http://").removeSuffix("/")
         if (host.isEmpty()) {
-            status = "请输入 ESP32 IP 地址"
+            status = text.enterIp
             return
         }
-        status = "正在连接…"
+        status = text.connecting
         try {
             val result = withContext(Dispatchers.IO) { fetchReadings(host) }
             readings = result
-            status = "已连接"
+            status = text.connected
             lastUpdated = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
         } catch (error: Exception) {
-            status = "连接失败：${error.message ?: "HTTP 请求失败"}"
+            status = "${text.connectionFailed}: ${error.message ?: text.httpFailed}"
         }
     }
 
-    LaunchedEffect(activeHost, refreshToken) {
+    LaunchedEffect(activeHost, refreshToken, english) {
         if (activeHost.isNotBlank()) {
             while (true) {
                 refresh()
@@ -90,42 +104,129 @@ private fun SensorScreen(modifier: Modifier = Modifier) {
         modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text("FYP 环境监测", style = MaterialTheme.typography.headlineSmall)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(text.title, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(if (english) "EN" else "中")
+                Switch(
+                    checked = english,
+                    onCheckedChange = { selected ->
+                        english = selected
+                        preferences.edit().putBoolean(KEY_ENGLISH, selected).apply()
+                    }
+                )
+            }
+        }
+
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
                 value = ipAddress,
-                onValueChange = { ipAddress = it },
-                label = { Text("ESP32 IP 地址") },
-                placeholder = { Text("例如 192.168.1.100") },
+                onValueChange = { value ->
+                    ipAddress = value
+                    preferences.edit().putString(KEY_LAST_IP, value).apply()
+                },
+                label = { Text(text.ipLabel) },
+                placeholder = { Text(text.ipPlaceholder) },
                 singleLine = true,
                 modifier = Modifier.weight(1f)
             )
             Button(onClick = {
                 activeHost = ipAddress
                 refreshToken++
-            }) { Text("连接") }
+            }) { Text(text.connect) }
         }
-        Text("Wi‑Fi/HTTP 状态：$status")
-        Text("最后更新时间：$lastUpdated")
-        Button(onClick = { refreshToken++ }, modifier = Modifier.fillMaxWidth()) { Text("手动刷新") }
-        SensorCard("温度", readings.temperature?.let { "%.2f °C".format(Locale.US, it) } ?: "--")
-        SensorCard("湿度", readings.humidity?.let { "%.2f %%".format(Locale.US, it) } ?: "--")
-        SensorCard("光照强度", readings.illuminance?.let { "%.2f lux".format(Locale.US, it) } ?: "--")
-        SensorCard("PM1.0", readings.pm1?.let { "$it µg/m³" } ?: "--")
-        SensorCard("PM2.5", readings.pm25?.let { "$it µg/m³" } ?: "--")
-        SensorCard("PM10", readings.pm10?.let { "$it µg/m³" } ?: "--")
+
+        Text("${text.statusLabel}: $status")
+        Text("${text.updatedLabel}: $lastUpdated")
+        Button(onClick = { refreshToken++ }, modifier = Modifier.fillMaxWidth()) { Text(text.refresh) }
+        SensorCard(text.temperature, readings.temperature?.let { "%.2f °C".format(Locale.US, it) } ?: "--")
+        SensorCard(text.humidity, readings.humidity?.let { "%.2f %%".format(Locale.US, it) } ?: "--")
+        SensorCard(text.illuminance, readings.illuminance?.let { "%.2f lux".format(Locale.US, it) } ?: "--")
+        SensorCard(text.pm1, readings.pm1?.let { "$it µg/m³" } ?: "--")
+        SensorCard(text.pm25, readings.pm25?.let { "$it µg/m³" } ?: "--")
+        SensorCard(text.pm10, readings.pm10?.let { "$it µg/m³" } ?: "--")
     }
 }
 
 @Composable
 private fun SensorCard(label: String, value: String) {
     Card(modifier = Modifier.fillMaxWidth()) {
-        Row(modifier = Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
             Text(label)
             Text(value, style = MaterialTheme.typography.titleMedium)
         }
     }
 }
+
+private data class UiText(
+    val title: String,
+    val ipLabel: String,
+    val ipPlaceholder: String,
+    val connect: String,
+    val refresh: String,
+    val statusLabel: String,
+    val updatedLabel: String,
+    val temperature: String,
+    val humidity: String,
+    val illuminance: String,
+    val pm1: String,
+    val pm25: String,
+    val pm10: String,
+    val enterIp: String,
+    val connecting: String,
+    val connected: String,
+    val connectionFailed: String,
+    val httpFailed: String,
+)
+
+private val ChineseText = UiText(
+    title = "室内环境参数监测系统",
+    ipLabel = "ESP32 IP 地址",
+    ipPlaceholder = "例如 192.168.1.100",
+    connect = "连接",
+    refresh = "手动刷新",
+    statusLabel = "Wi‑Fi/HTTP 状态",
+    updatedLabel = "最后更新时间",
+    temperature = "温度",
+    humidity = "湿度",
+    illuminance = "光照强度",
+    pm1 = "PM1.0",
+    pm25 = "PM2.5",
+    pm10 = "PM10",
+    enterIp = "请输入 ESP32 IP 地址",
+    connecting = "正在连接…",
+    connected = "已连接",
+    connectionFailed = "连接失败",
+    httpFailed = "HTTP 请求失败",
+)
+
+private val EnglishText = UiText(
+    title = "Indoor Environmental Parameter Monitoring System",
+    ipLabel = "ESP32 IP address",
+    ipPlaceholder = "For example, 192.168.1.100",
+    connect = "Connect",
+    refresh = "Refresh",
+    statusLabel = "Wi‑Fi/HTTP status",
+    updatedLabel = "Last updated",
+    temperature = "Temperature",
+    humidity = "Humidity",
+    illuminance = "Illuminance",
+    pm1 = "PM1.0",
+    pm25 = "PM2.5",
+    pm10 = "PM10",
+    enterIp = "Enter the ESP32 IP address",
+    connecting = "Connecting…",
+    connected = "Connected",
+    connectionFailed = "Connection failed",
+    httpFailed = "HTTP request failed",
+)
 
 private data class SensorReadings(
     val temperature: Double? = null,
@@ -159,5 +260,8 @@ private fun fetchReadings(host: String): SensorReadings {
     }
 }
 
-private fun JSONObject.optNullableDouble(name: String): Double? = if (isNull(name)) null else optDouble(name).takeUnless { it.isNaN() }
-private fun JSONObject.optNullableInt(name: String): Int? = if (isNull(name)) null else optInt(name)
+private fun JSONObject.optNullableDouble(name: String): Double? =
+    if (isNull(name)) null else optDouble(name).takeUnless { it.isNaN() }
+
+private fun JSONObject.optNullableInt(name: String): Int? =
+    if (isNull(name)) null else optInt(name)
