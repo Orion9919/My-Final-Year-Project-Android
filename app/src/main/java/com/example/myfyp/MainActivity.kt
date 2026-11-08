@@ -6,10 +6,13 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -28,8 +31,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.Canvas
 import com.example.myfyp.ui.theme.MyFYPTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -68,6 +77,7 @@ private fun SensorScreen(modifier: Modifier = Modifier) {
     var activeHost by remember { mutableStateOf(savedIp) }
     var english by remember { mutableStateOf(preferences.getBoolean(KEY_ENGLISH, false)) }
     var readings by remember { mutableStateOf(SensorReadings()) }
+    var history by remember { mutableStateOf(listOf<HistoryPoint>()) }
     var status by remember { mutableStateOf(if (savedIp.isBlank()) "未连接" else "正在自动连接…") }
     var lastUpdated by remember { mutableStateOf("--") }
     var refreshToken by remember { mutableStateOf(0) }
@@ -84,6 +94,8 @@ private fun SensorScreen(modifier: Modifier = Modifier) {
         try {
             val result = withContext(Dispatchers.IO) { fetchReadings(host) }
             readings = result
+            val now = System.currentTimeMillis()
+            history = (history + HistoryPoint(now, result)).filter { it.timestamp >= now - 60_000L }
             status = text.connected
             lastUpdated = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
         } catch (error: Exception) {
@@ -149,6 +161,12 @@ private fun SensorScreen(modifier: Modifier = Modifier) {
         SensorCard(text.pm1, readings.pm1?.let { "$it µg/m³" } ?: "--")
         SensorCard(text.pm25, readings.pm25?.let { "$it µg/m³" } ?: "--")
         SensorCard(text.pm10, readings.pm10?.let { "$it µg/m³" } ?: "--")
+        MeasurementChart(text.temperature, history, { it.temperature }, Color(0xFFE53935))
+        MeasurementChart(text.humidity, history, { it.humidity }, Color(0xFF1E88E5))
+        MeasurementChart(text.illuminance, history, { it.illuminance }, Color(0xFFF9A825))
+        MeasurementChart(text.pm1, history, { it.pm1?.toDouble() }, Color(0xFF43A047))
+        MeasurementChart(text.pm25, history, { it.pm25?.toDouble() }, Color(0xFF8E24AA))
+        MeasurementChart(text.pm10, history, { it.pm10?.toDouble() }, Color(0xFF00897B))
     }
 }
 
@@ -164,6 +182,75 @@ private fun SensorCard(label: String, value: String) {
         }
     }
 }
+
+@Composable
+private fun MeasurementChart(
+    label: String,
+    history: List<HistoryPoint>,
+    valueSelector: (SensorReadings) -> Double?,
+    lineColor: Color,
+) {
+    val now = System.currentTimeMillis()
+    val values = history.mapNotNull { point -> valueSelector(point.readings)?.let { point.timestamp to it } }
+    val minValue = values.minOfOrNull { it.second } ?: 0.0
+    val maxValue = values.maxOfOrNull { it.second } ?: 1.0
+    val range = (maxValue - minValue).takeIf { it > 0.0 } ?: 1.0
+    val chartMin = minValue - range * 0.1
+    val chartMax = maxValue + range * 0.1
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(label, style = MaterialTheme.typography.titleMedium)
+            Row(modifier = Modifier.fillMaxWidth().height(150.dp)) {
+                Column(
+                    modifier = Modifier.fillMaxHeight().padding(end = 6.dp),
+                    verticalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(formatChartValue(chartMax), style = MaterialTheme.typography.labelSmall)
+                    Text(formatChartValue(chartMin), style = MaterialTheme.typography.labelSmall)
+                }
+                Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val left = 8f
+                        val right = size.width - 4f
+                        val top = 4f
+                        val bottom = size.height - 8f
+                        drawLine(Color.LightGray, Offset(left, top), Offset(left, bottom), 1.5f)
+                        drawLine(Color.LightGray, Offset(left, bottom), Offset(right, bottom), 1.5f)
+                        drawLine(Color(0xFFE0E0E0), Offset(left, top + (bottom - top) / 2), Offset(right, top + (bottom - top) / 2), 1f)
+
+                        val path = Path()
+                        var hasPoint = false
+                        values.forEach { (timestamp, value) ->
+                            val x = left + ((timestamp - (now - 60_000L)).toFloat() / 60_000f).coerceIn(0f, 1f) * (right - left)
+                            val y = bottom - ((value - chartMin) / (chartMax - chartMin)).toFloat().coerceIn(0f, 1f) * (bottom - top)
+                            if (!hasPoint) {
+                                path.moveTo(x, y)
+                                hasPoint = true
+                            } else {
+                                path.lineTo(x, y)
+                            }
+                        }
+                        if (hasPoint) {
+                            drawPath(path, lineColor, style = Stroke(width = 4f, cap = StrokeCap.Round))
+                        }
+                    }
+                    if (values.isEmpty()) {
+                        Text("--", modifier = Modifier.align(Alignment.Center))
+                    }
+                }
+            }
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("-60s", style = MaterialTheme.typography.labelSmall)
+                Text("now", style = MaterialTheme.typography.labelSmall)
+            }
+        }
+    }
+}
+
+private fun formatChartValue(value: Double): String =
+    if (value >= 100.0 || value == value.toInt().toDouble()) "%.0f".format(Locale.US, value)
+    else "%.1f".format(Locale.US, value)
 
 private data class UiText(
     val title: String,
@@ -236,6 +323,8 @@ private data class SensorReadings(
     val pm25: Int? = null,
     val pm10: Int? = null,
 )
+
+private data class HistoryPoint(val timestamp: Long, val readings: SensorReadings)
 
 private fun fetchReadings(host: String): SensorReadings {
     val connection = (URL("http://$host/api/sensors").openConnection() as HttpURLConnection).apply {

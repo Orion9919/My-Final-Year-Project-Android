@@ -11,7 +11,7 @@
 - 光照强度（lux）
 - PM1.0、PM2.5、PM10（µg/m³）
 
-应用界面右上角提供中英文切换开关，并提供 ESP32 IP 地址输入、连接、手动刷新、Wi‑Fi/HTTP 状态和最后更新时间。IP 地址会在退出后保留；重新打开应用时会自动尝试连接上次地址。修改 IP 输入框后不会自动切换连接目标，必须点击“连接”按钮。连接成功后，应用约每 2 秒请求一次：
+应用界面右上角提供中英文切换开关，并提供 ESP32 IP 地址输入、连接、手动刷新、Wi‑Fi/HTTP 状态和最后更新时间。IP 地址会在退出后保留；重新打开应用时会自动尝试连接上次地址。修改 IP 输入框后不会自动切换连接目标，必须点击“连接”按钮。连接成功后，应用约每 2 秒请求一次，并在数字结果下方显示六个按上下排列的测量曲线，每条曲线保留最近 60 秒的数据。
 
 ```text
 GET http://<ESP32_IP>/api/sensors
@@ -52,7 +52,7 @@ The app displays:
 - Illuminance (lux)
 - PM1.0, PM2.5 and PM10 (µg/m³)
 
-The top-right language switch changes between Chinese and English. The UI provides an ESP32 IP address field, connect and manual refresh buttons, Wi‑Fi/HTTP status, and the last update time. The last IP address is preserved after the app exits and is automatically connected when the app starts again. Editing the IP address does not change the active connection until the user taps **连接 / Connect**. After connecting, the app polls the ESP32 approximately every two seconds:
+The top-right language switch changes between Chinese and English. The UI provides an ESP32 IP address field, connect and manual refresh buttons, Wi‑Fi/HTTP status, and the last update time. The last IP address is preserved after the app exits and is automatically connected when the app starts again. Editing the IP address does not change the active connection until the user taps **连接 / Connect**. After connecting, the app polls the ESP32 approximately every two seconds and displays six vertically stacked measurement charts below the numeric results, keeping the latest 60 seconds of data.
 
 ```text
 GET http://<ESP32_IP>/api/sensors
@@ -83,6 +83,22 @@ app/build/outputs/apk/debug/app-debug.apk
 ```
 
 ## Changelog / 变更记录
+
+### v1.0.2
+
+中文：
+
+- 在六项数字结果下方新增六个纵向排列的测量曲线。
+- 横轴为最近 60 秒时间，纵轴为对应测量结果。
+- 温度、湿度、光照、PM1.0、PM2.5、PM10 使用不同颜色显示。
+- 曲线只保存在内存中，不增加数据库或历史文件。
+
+English:
+
+- Added six vertically stacked measurement charts below the numeric results.
+- The horizontal axis covers the latest 60 seconds and the vertical axis shows the corresponding measurement value.
+- Temperature, humidity, illuminance, PM1.0, PM2.5 and PM10 use different line colors.
+- Chart history is kept in memory only; no database or history file is added.
 
 ### v1.0.1
 
